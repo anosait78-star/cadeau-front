@@ -40,6 +40,20 @@ function renderPage(features = ["finance"], permissions = ["finance.read", "fina
   );
 }
 
+/**
+ * Sets a date field by driving the app's own DatePicker — open the calendar and
+ * click a day — since it replaced the native `input[type=date]` a phone renders
+ * as an LTR, US-ordered control inside an RTL screen.
+ */
+async function pickAnyDay(fieldLabel: string): Promise<void> {
+  // At the tests' default (mobile) viewport the filters live behind a sheet.
+  if (screen.queryByRole("button", { name: fieldLabel }) === null) {
+    await userEvent.click(screen.getByRole("button", { name: /Filters/ }));
+  }
+  await userEvent.click(screen.getByRole("button", { name: fieldLabel }));
+  await userEvent.click(await screen.findByRole("button", { name: "15" }));
+}
+
 const SUPPLIER = "11111111-1111-1111-1111-111111111111";
 const VARIANT = "22222222-2222-2222-2222-222222222222";
 const WAREHOUSE = "33333333-3333-3333-3333-333333333333";
@@ -874,9 +888,14 @@ describe("FinancePage", () => {
   it("loads a comparison range and shows the previous period", async () => {
     renderPage();
     await userEvent.click(screen.getByRole("tab", { name: "Cash center & P&L" }));
-    await userEvent.type(screen.getByLabelText("Compare from"), "2025-12-01");
-    await userEvent.type(screen.getByLabelText("Compare to"), "2025-12-31");
-    await userEvent.click(screen.getByRole("button", { name: "Load" }));
+    // The comparison is requested whenever both compare dates are set; which
+    // days they are is the mocked response's business, not this test's.
+    await pickAnyDay("Compare from");
+    await pickAnyDay("Compare to");
+    // Load runs the report rather than filtering it, so it lives outside the
+    // sheet — which has to be dismissed to reach it.
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(await screen.findByRole("button", { name: "Load" }));
     expect(await screen.findByText("Previous period")).toBeInTheDocument();
   });
 

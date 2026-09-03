@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
+import { haptic } from "@/lib/haptics";
 
 export type ToastVariant = "default" | "success" | "error";
 
@@ -51,6 +52,10 @@ export function ToastProvider({ children }: { children: ReactNode }): ReactNode 
       const id = crypto.randomUUID();
       const variant = options?.variant ?? "default";
       const durationMs = options?.durationMs ?? 2500;
+      // A rejected action is felt as well as read: on a phone the toast can
+      // appear outside where the user is looking, and the buzz is what tells
+      // them the thing they just tapped did not happen.
+      if (variant === "error") haptic("error");
       setToasts((prev) => [...prev, { id, message, variant }]);
       timers.current.set(
         id,
@@ -65,7 +70,9 @@ export function ToastProvider({ children }: { children: ReactNode }): ReactNode 
   return (
     <ToastContext value={value}>
       {children}
-      <div className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex flex-col items-center gap-2 px-4">
+      {/* Toasts clear the Mobile bottom nav (and the home indicator below it);
+          on Desktop, where there is no bottom nav, they sit at the usual inset. */}
+      <div className="pointer-events-none fixed inset-x-0 bottom-[calc(var(--mobile-nav-total)+0.5rem)] z-50 flex flex-col items-center gap-2 px-4 lg:bottom-4">
         {toasts.map((toast) => (
           <p
             key={toast.id}

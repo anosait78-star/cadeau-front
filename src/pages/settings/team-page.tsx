@@ -12,6 +12,7 @@ import { useCapabilities } from "@/features/access/use-capabilities";
 import { useI18n } from "@/i18n/i18n-provider";
 import type { TranslationKey } from "@/i18n/dictionaries";
 import { useToast } from "@/components/toast/toast";
+import { PageTitle } from "@/components/layout/page-title";
 import { InvitationCodeDialog } from "@/features/team/invitation-code-dialog";
 import { InviteMemberDialog } from "@/features/team/invite-member-dialog";
 import { teamErrorText } from "@/features/team/team-error-text";
@@ -118,19 +119,16 @@ export function TeamPage(): ReactNode {
 
   if (companyId === null) {
     return (
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 sm:p-6">
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 lg:p-6">
         <ErrorState description={t("team.error.noCompany")} />
       </div>
     );
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 sm:p-6">
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 lg:p-6">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex flex-col gap-1">
-          <h1 className="text-2xl font-semibold">{t("team.title")}</h1>
-          <p className="text-sm text-muted-foreground">{t("team.subtitle")}</p>
-        </div>
+        <PageTitle title={t("team.title")} description={t("team.subtitle")} />
         {canManage ? (
           <Button size="sm" onClick={() => setInviteOpen(true)}>
             {t("team.invite.button")}
@@ -226,9 +224,6 @@ export function TeamPage(): ReactNode {
                   <thead>
                     <tr className="border-b border-border text-start text-xs uppercase text-muted-foreground">
                       <th className="px-2 py-2 text-start font-medium">
-                        {t("team.invitations.column.email")}
-                      </th>
-                      <th className="px-2 py-2 text-start font-medium">
                         {t("team.invitations.column.role")}
                       </th>
                       <th className="px-2 py-2 text-start font-medium">
@@ -245,7 +240,6 @@ export function TeamPage(): ReactNode {
                       const expired = new Date(invitation.expiresAt).getTime() <= Date.now();
                       return (
                         <tr key={invitation.id} className="border-b border-border last:border-0">
-                          <td className="px-2 py-2">{invitation.email}</td>
                           <td className="px-2 py-2">{roleLabel(invitation.role, t)}</td>
                           <td className="px-2 py-2">
                             <StatusBadge
@@ -332,7 +326,7 @@ export function TeamPage(): ReactNode {
         }}
         title={t("team.invitations.revoke.confirmTitle")}
         description={t("team.invitations.revoke.confirmDescription", {
-          email: invitationToRevoke?.email ?? "",
+          role: invitationToRevoke === null ? "" : roleLabel(invitationToRevoke.role, t),
         })}
         confirmLabel={t("team.invitations.revoke.confirm")}
         cancelLabel={t("team.invitations.revoke.cancel")}

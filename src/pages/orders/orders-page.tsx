@@ -1,24 +1,14 @@
-import {
-  ArrowDownRight,
-  ArrowUpRight,
-  CalendarDays,
-  Clock,
-  Download,
-  MoreHorizontal,
-  Plus,
-  Printer,
-  ShoppingBag,
-  Truck,
-  Wallet,
-} from "lucide-react";
+import { Download, MoreHorizontal, Plus, Printer } from "lucide-react";
 import { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import { useSearchParams } from "react-router";
 import { AuthContext } from "@/auth/auth-context";
 import { FeatureGate } from "@/components/access/feature-gate";
 import { PermissionGate } from "@/components/access/permission-gate";
 import { BulkActionsBar } from "@/components/bulk-actions/bulk-actions-bar";
 import { DataGrid } from "@/components/data-grid/data-grid";
 import { MobileCardList } from "@/components/data-grid/mobile-card-list";
+import { MobileListRow } from "@/components/data-grid/mobile-list-row";
 import { useDataGridSelection } from "@/components/data-grid/use-data-grid-selection";
 import { DetailPanel } from "@/components/detail-panel/detail-panel";
 import type { Translate } from "@/components/i18n/translate-type";
@@ -27,7 +17,6 @@ import { EmptyState } from "@/components/states/empty-state";
 import { ErrorState } from "@/components/states/error-state";
 import { useToast } from "@/components/toast/toast";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { Spinner } from "@/components/ui/spinner";
 import {
@@ -54,6 +43,11 @@ import {
   type PaymentStatus,
 } from "@/features/orders/orders-api";
 import { SelectCarrierDialog } from "@/features/shipping/select-carrier-dialog";
+import {
+  useRegisterMobilePrimaryAction,
+  useRegisterMobileRefresh,
+} from "@/components/shell/mobile/mobile-header-context";
+import { useCapabilities } from "@/features/access/use-capabilities";
 import { useIsDesktop } from "@/hooks/use-media-query";
 import type { TranslationKey } from "@/i18n/dictionaries";
 import { useI18n } from "@/i18n/i18n-provider";
@@ -69,9 +63,7 @@ import {
 } from "./orders-detail-sections";
 import { downloadCsv, ordersToCsv } from "./orders-export";
 import { OrdersFilterBar } from "./orders-filter-bar";
-import { fetchOrdersListKpis, type OrdersListKpis } from "./orders-list-kpis";
 import { OrderRowActions, TRANSITIONS } from "./orders-row-actions";
-import { OrdersSparkline } from "./orders-sparkline";
 import { isWhatsappStatus, openWhatsappForOrder, type WhatsappStatus } from "./orders-whatsapp";
 
 type State =
@@ -105,6 +97,8 @@ export function OrdersPage(): ReactNode {
 function OrdersScreen(): ReactNode {
   const { t, locale } = useI18n();
   const isDesktop = useIsDesktop();
+  const capabilities = useCapabilities();
+  const [searchParams, setSearchParams] = useSearchParams();
   const auth = useContext(AuthContext);
   const currentUserId = auth?.user?.id ?? null;
   const companyId = auth?.user?.activeCompanyId ?? null;
@@ -121,9 +115,29 @@ function OrdersScreen(): ReactNode {
   const [paymentFilter, setPaymentFilter] = useState<PaymentStatus | "all">("all");
   const [sortDesc, setSortDesc] = useState(true);
   const [creating, setCreating] = useState(false);
+
+  // On mobile, "new order" is the shell's floating action button rather than a
+  // toolbar button competing with the page title (ADR-002).
+  useRegisterMobilePrimaryAction({
+    label: t("orders.actions.create"),
+    icon: Plus,
+    onAction: () => setCreating(true),
+    enabled: capabilities.has({ permission: "orders.manage" }),
+  });
+  // Pull down at the top of the list to reload it (Mobile shell).
+  useRegisterMobileRefresh(() => load());
+
+  // The installed app's "New order" shortcut launches straight into the create
+  // form. The parameter is consumed on arrival so a reload does not reopen it.
+  useEffect(() => {
+    if (searchParams.get("new") === null) return;
+    if (capabilities.has({ permission: "orders.manage" })) setCreating(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete("new");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams, capabilities]);
   const [labelsById, setLabelsById] = useState<Map<string, OrderLabel>>(new Map());
   const [selectedOrder, setSelectedOrder] = useState<OrderListItem | null>(null);
-  const [kpis, setKpis] = useState<OrdersListKpis | null>(null);
   // Shipments are always created one order at a time (no bulk shipping) — set
   // when exactly one row is selected and "Create shipment" is clicked.
   const [shippingOrder, setShippingOrder] = useState<OrderListItem | null>(null);
@@ -191,12 +205,6 @@ function OrdersScreen(): ReactNode {
       )
       .catch(() => setLabelsById(new Map()));
   }, []);
-
-  useEffect(() => {
-    void fetchOrdersListKpis()
-      .then(setKpis)
-      .catch(() => setKpis(null));
-  }, [state.kind === "ready" ? state.items.length : -1]);
 
   const selectStatus = (next: OrderStatus | "all"): void => {
     setStatus(next);
@@ -378,18 +386,24 @@ function OrdersScreen(): ReactNode {
   }, [state, selection.selectedIds]);
 
   return (
-    <div className="mx-auto flex w-full max-w-[100rem] flex-col gap-6 p-4 sm:p-6">
-      {/* Header: actions at the start, title/subtitle at the end (matches the app's RTL reading order). */}
+    // The page gutter on mobile belongs to the shell (`.mobile-main`); adding
+    // one here too would double it.
+    <div className="mx-auto flex w-full max-w-[100rem] flex-col gap-6 lg:p-6">
+      {/* Header: actions at the start, title/subtitle at the end (matches the app's RTL reading order).
+          On mobile the shell owns the title and the FAB owns "create", so only
+          the secondary actions remain. */}
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex flex-wrap items-center gap-2">
-          <PermissionGate permission="orders.manage">
-            {creating ? null : (
-              <Button onClick={() => setCreating(true)}>
-                <Plus className="h-4 w-4" aria-hidden="true" />
-                {t("orders.actions.create")}
-              </Button>
-            )}
-          </PermissionGate>
+          {isDesktop ? (
+            <PermissionGate permission="orders.manage">
+              {creating ? null : (
+                <Button onClick={() => setCreating(true)}>
+                  <Plus className="h-4 w-4" aria-hidden="true" />
+                  {t("orders.actions.create")}
+                </Button>
+              )}
+            </PermissionGate>
+          ) : null}
           <Button variant="outline" onClick={onExport}>
             <Download className="h-4 w-4" aria-hidden="true" />
             {t("orders.actions.export")}
@@ -429,17 +443,23 @@ function OrdersScreen(): ReactNode {
           </DropdownMenu>
         </div>
 
-        <div className="text-end">
-          <h1 className="text-display text-foreground">{t("orders.title")}</h1>
-          <p className="text-body text-muted-foreground">{t("orders.subtitle")}</p>
-        </div>
+        {isDesktop ? (
+          <div className="text-end">
+            <h1 className="text-display text-foreground">{t("orders.title")}</h1>
+            <p className="text-body text-muted-foreground">{t("orders.subtitle")}</p>
+          </div>
+        ) : null}
       </header>
 
-      {kpis !== null ? <OrdersKpiRow kpis={kpis} t={t} locale={locale} /> : null}
-
-      {/* Status tabs with live counts. */}
+      {/* Status tabs with live counts. On a phone the twelve statuses stay on
+          one line and scroll sideways — wrapping them turned the strip into a
+          five-row block that pushed the orders themselves off the screen.
+          Desktop has the width to wrap, so it still does. */}
       <div
-        className="flex flex-wrap gap-1.5 overflow-x-auto rounded-2xl border border-border bg-card p-1.5 shadow-xs"
+        className={cn(
+          "flex gap-1.5 rounded-2xl border border-border bg-card p-1.5 shadow-xs",
+          "flex-nowrap overflow-x-auto hide-scrollbar lg:flex-wrap lg:overflow-x-visible",
+        )}
         role="tablist"
         aria-label={t("orders.title")}
       >
@@ -476,7 +496,6 @@ function OrdersScreen(): ReactNode {
         search={search}
         onSearchChange={setSearch}
         status={status}
-        onStatusChange={selectStatus}
         dateFrom={dateFrom}
         onDateFromChange={setDateFrom}
         dateTo={dateTo}
@@ -730,152 +749,6 @@ function WhatsappPromptCard({
   );
 }
 
-interface KpiTileSpec {
-  readonly label: string;
-  readonly value: string;
-  readonly icon: ReactNode;
-  readonly iconToneClassName: string;
-  readonly trendPct: number | null;
-  readonly series: readonly number[] | null;
-  readonly approximate?: boolean;
-}
-
-function OrdersKpiRow({
-  kpis,
-  t,
-  locale,
-}: {
-  kpis: OrdersListKpis;
-  t: Translate;
-  locale: string;
-}): ReactNode {
-  const tiles: KpiTileSpec[] = [
-    {
-      label: t("orders.kpi.cod"),
-      value: formatMoney(kpis.codToday.value, locale),
-      icon: <Wallet className="h-5 w-5" aria-hidden="true" />,
-      iconToneClassName: "bg-success/10 text-success",
-      trendPct: kpis.codToday.trendPct,
-      series: null,
-      approximate: kpis.codToday.approximate,
-    },
-    {
-      label: t("orders.kpi.revenueToday"),
-      value: formatMoney(kpis.revenueToday.value, locale),
-      icon: <ShoppingBag className="h-5 w-5" aria-hidden="true" />,
-      iconToneClassName: "bg-primary/10 text-primary",
-      trendPct: kpis.revenueToday.trendPct,
-      series: null,
-      approximate: kpis.revenueToday.approximate,
-    },
-    {
-      label: t("orders.kpi.shipped"),
-      value: String(kpis.shipped.value),
-      icon: <Truck className="h-5 w-5" aria-hidden="true" />,
-      iconToneClassName: "bg-info/10 text-info",
-      trendPct: kpis.shipped.trendPct,
-      series: kpis.shipped.series,
-    },
-    {
-      label: t("orders.kpi.processing"),
-      value: String(kpis.processing.value),
-      icon: <Clock className="h-5 w-5" aria-hidden="true" />,
-      iconToneClassName: "bg-warning/10 text-warning",
-      trendPct: kpis.processing.trendPct,
-      series: kpis.processing.series,
-    },
-    {
-      label: t("orders.kpi.ordersToday"),
-      value: String(kpis.ordersToday.value),
-      icon: <CalendarDays className="h-5 w-5" aria-hidden="true" />,
-      iconToneClassName: "bg-primary/10 text-primary",
-      trendPct: kpis.ordersToday.trendPct,
-      series: kpis.ordersToday.series,
-    },
-    {
-      label: t("orders.kpi.totalOrders"),
-      value: String(kpis.totalOrders.value),
-      icon: <ShoppingBag className="h-5 w-5" aria-hidden="true" />,
-      iconToneClassName: "bg-muted text-foreground",
-      trendPct: kpis.totalOrders.trendPct,
-      series: kpis.totalOrders.series,
-    },
-  ];
-
-  return (
-    <div
-      className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-6"
-      data-testid="orders-kpi-row"
-    >
-      {tiles.map((tile) => (
-        <OrdersKpiCard key={tile.label} tile={tile} trendSuffix={t("orders.kpi.vsYesterday")} />
-      ))}
-    </div>
-  );
-}
-
-function OrdersKpiCard({
-  tile,
-  trendSuffix,
-}: {
-  tile: KpiTileSpec;
-  trendSuffix: string;
-}): ReactNode {
-  const trendTone =
-    tile.trendPct === null
-      ? "text-muted-foreground"
-      : tile.trendPct > 0
-        ? "text-success"
-        : tile.trendPct < 0
-          ? "text-destructive"
-          : "text-muted-foreground";
-
-  return (
-    <div className="flex h-[140px] flex-col justify-between rounded-2xl border border-border bg-card p-4 shadow-xs">
-      <div className="flex items-start justify-between">
-        <span
-          className={cn(
-            "flex h-9 w-9 items-center justify-center rounded-full",
-            tile.iconToneClassName,
-          )}
-        >
-          {tile.icon}
-        </span>
-        {tile.series !== null ? (
-          <OrdersSparkline
-            values={tile.series}
-            className="h-6 w-16"
-            toneClassName="text-muted-foreground"
-          />
-        ) : null}
-      </div>
-      <div>
-        <p className="truncate text-caption text-muted-foreground">{tile.label}</p>
-        <p className="text-h1 leading-tight text-foreground tabular-nums" dir="ltr">
-          {tile.value}
-        </p>
-      </div>
-      <div className={cn("flex items-center gap-1 text-caption", trendTone)}>
-        {tile.trendPct !== null && tile.trendPct !== 0 ? (
-          tile.trendPct > 0 ? (
-            <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
-          ) : (
-            <ArrowDownRight className="h-3.5 w-3.5" aria-hidden="true" />
-          )
-        ) : null}
-        <span dir="ltr">
-          {tile.trendPct === null
-            ? "—"
-            : `${tile.trendPct > 0 ? "+" : ""}${tile.trendPct.toFixed(1)}%`}
-        </span>
-        <span className="truncate text-muted-foreground">
-          {tile.approximate === true ? "· ≈" : trendSuffix}
-        </span>
-      </div>
-    </div>
-  );
-}
-
 function StatusTab({
   label,
   count,
@@ -930,50 +803,53 @@ function OrderCard({
   onOpenDetail: (order: OrderListItem) => void;
   onSendWhatsapp: () => void;
 }): ReactNode {
+  // A list row, not a stacked table: the order number leads, the customer is the
+  // title, the money is the trailing value, and the rest is one secondary line.
   return (
-    <Card
-      role="button"
-      tabIndex={0}
-      onClick={() => onOpenDetail(order)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") onOpenDetail(order);
-      }}
-      className="cursor-pointer"
-    >
-      <CardHeader>
-        <CardTitle className="flex flex-wrap items-center gap-2 text-base">
-          <span>#{order.orderNumber}</span>
-          <span className="text-muted-foreground">·</span>
-          <span>{order.customerName}</span>
-          <StatusBadge
-            status={order.status}
-            label={t(`orders.status.${order.status}` as TranslationKey)}
-          />
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-4">
-          <Field label={t("orders.field.items")}>{order.itemCount}</Field>
-          <Field label={t("orders.field.total")}>{formatMoney(order.total, locale)}</Field>
-          <Field label={t("orders.field.collected")}>
-            {formatMoney(order.collectedAmount, locale)}
-          </Field>
-          <Field label={t("orders.field.payment")}>
+    <div className="card-raised overflow-hidden rounded-xl border border-border bg-card">
+      <MobileListRow
+        onPress={() => onOpenDetail(order)}
+        leading={
+          <span
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-muted text-caption font-semibold text-muted-foreground"
+            dir="ltr"
+          >
+            #{order.orderNumber}
+          </span>
+        }
+        title={order.customerName}
+        // Status and size only: the money already reads down the trailing edge,
+        // and a secondary line that has to be truncated tells the user nothing.
+        secondary={
+          <span className="flex items-center gap-2">
+            <StatusBadge
+              status={order.status}
+              label={t(`orders.status.${order.status}` as TranslationKey)}
+            />
+            <span>
+              {t("orders.field.items")}: {order.itemCount}
+            </span>
+          </span>
+        }
+        trailing={
+          <span className="flex flex-col items-end gap-1">
+            <span className="text-body font-semibold text-foreground">
+              {formatMoney(order.total, locale)}
+            </span>
             <PaymentBadge
               status={order.paymentStatus}
               label={t(`orders.payment.${order.paymentStatus}` as TranslationKey)}
             />
-          </Field>
-        </dl>
-        {isWhatsappStatus(order.status) ? (
+          </span>
+        }
+      />
+      {isWhatsappStatus(order.status) ? (
+        <div className="border-t border-border px-4 py-2">
           <Button
             size="sm"
-            className="self-start bg-[#25D366] text-white hover:bg-[#1ebe57]"
+            className="bg-[#25D366] text-white hover:bg-[#1ebe57]"
             disabled={sendingWhatsapp}
-            onClick={(e) => {
-              e.stopPropagation();
-              onSendWhatsapp();
-            }}
+            onClick={onSendWhatsapp}
           >
             {sendingWhatsapp ? (
               <Spinner className="h-4 w-4 text-white" />
@@ -982,17 +858,8 @@ function OrderCard({
             )}
             {t("orders.whatsapp.rowButtonLabel")}
           </Button>
-        ) : null}
-      </CardContent>
-    </Card>
-  );
-}
-
-function Field({ label, children }: { label: string; children: ReactNode }): ReactNode {
-  return (
-    <div className="flex flex-col">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd>{children}</dd>
+        </div>
+      ) : null}
     </div>
   );
 }

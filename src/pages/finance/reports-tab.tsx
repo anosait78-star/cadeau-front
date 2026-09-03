@@ -1,10 +1,11 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
+import { FilterBar } from "@/components/filter-bar/filter-bar";
 import { ErrorState } from "@/components/states/error-state";
 import { LoadingState } from "@/components/states/loading-state";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import {
   getCashCenterReport,
   getPnlReport,
@@ -70,45 +71,46 @@ export function ReportsTab({ onNotify }: { onNotify: (text: string) => void }): 
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-end gap-3">
+      {/* Four date pickers stacked ahead of the report is most of a phone
+          screen, so below the desktop breakpoint they fold into a sheet — while
+          "Load", which runs the report rather than narrowing it, stays out. */}
+      <FilterBar
+        activeCount={(compareFrom.length > 0 ? 1 : 0) + (compareTo.length > 0 ? 1 : 0)}
+        actions={<Button onClick={() => void load()}>{t("finance.reports.actions.load")}</Button>}
+      >
         <Field id="report-from" label={t("finance.reports.dateFrom")}>
-          <Input
+          <DatePicker
             id="report-from"
-            type="date"
-            value={dateFrom}
-            onChange={(e) => setDateFrom(e.target.value)}
-            aria-label={t("finance.reports.dateFrom")}
+            value={dateFrom.length > 0 ? dateFrom : null}
+            onChange={(next) => setDateFrom(next ?? "")}
+            ariaLabel={t("finance.reports.dateFrom")}
           />
         </Field>
         <Field id="report-to" label={t("finance.reports.dateTo")}>
-          <Input
+          <DatePicker
             id="report-to"
-            type="date"
-            value={dateTo}
-            onChange={(e) => setDateTo(e.target.value)}
-            aria-label={t("finance.reports.dateTo")}
+            value={dateTo.length > 0 ? dateTo : null}
+            onChange={(next) => setDateTo(next ?? "")}
+            ariaLabel={t("finance.reports.dateTo")}
           />
         </Field>
         <Field id="report-compare-from" label={t("finance.reports.compareFrom")}>
-          <Input
+          <DatePicker
             id="report-compare-from"
-            type="date"
-            value={compareFrom}
-            onChange={(e) => setCompareFrom(e.target.value)}
-            aria-label={t("finance.reports.compareFrom")}
+            value={compareFrom.length > 0 ? compareFrom : null}
+            onChange={(next) => setCompareFrom(next ?? "")}
+            ariaLabel={t("finance.reports.compareFrom")}
           />
         </Field>
         <Field id="report-compare-to" label={t("finance.reports.compareTo")}>
-          <Input
+          <DatePicker
             id="report-compare-to"
-            type="date"
-            value={compareTo}
-            onChange={(e) => setCompareTo(e.target.value)}
-            aria-label={t("finance.reports.compareTo")}
+            value={compareTo.length > 0 ? compareTo : null}
+            onChange={(next) => setCompareTo(next ?? "")}
+            ariaLabel={t("finance.reports.compareTo")}
           />
         </Field>
-        <Button onClick={() => void load()}>{t("finance.reports.actions.load")}</Button>
-      </div>
+      </FilterBar>
 
       {state.kind === "loading" ? <LoadingState /> : null}
       {state.kind === "error" ? <ErrorState onRetry={() => void load()} /> : null}
