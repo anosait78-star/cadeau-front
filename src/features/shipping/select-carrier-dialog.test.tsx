@@ -32,11 +32,14 @@ describe("SelectCarrierDialog — Bosta fields (moved from the customer/order fo
   let fetchMock: ReturnType<typeof vi.fn>;
   /** What `GET /customers/cust-1` reports — a test sets this to cover the prefill. */
   let customerAddresses: unknown[];
+  /** What `GET /orders/order-1` reports as the order's delivery snapshot; null = no snapshot. */
+  let orderDelivery: unknown;
 
   beforeEach(() => {
     localStorage.clear();
     localStorage.setItem("cadeau.locale", "en");
     customerAddresses = [];
+    orderDelivery = null;
     fetchMock = vi.fn((input: string | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? "GET";
@@ -62,8 +65,10 @@ describe("SelectCarrierDialog — Bosta fields (moved from the customer/order fo
               {
                 districtId: "d1",
                 districtName: "1st Settlement",
+                districtNameAr: null,
                 zoneId: "z1",
                 zoneName: "New Cairo",
+                zoneNameAr: null,
               },
             ],
           }),
@@ -71,6 +76,13 @@ describe("SelectCarrierDialog — Bosta fields (moved from the customer/order fo
       }
       if (url.endsWith("/shipping/bosta/cities")) {
         return Promise.resolve(json(200, { data: [{ id: "c1", name: "Cairo", nameAr: null }] }));
+      }
+      if (url.match(/\/orders\/order-1$/) && method === "GET") {
+        // No route → the order read fails → the dialog falls back to the
+        // customer's saved address. `orderDelivery === null` keeps that path
+        // for every test that predates delivery snapshots.
+        if (orderDelivery === null) return Promise.resolve(json(404, {}));
+        return Promise.resolve(json(200, { id: "order-1", delivery: orderDelivery }));
       }
       if (url.match(/\/customers\/cust-1$/) && method === "GET") {
         return Promise.resolve(
@@ -119,20 +131,20 @@ describe("SelectCarrierDialog — Bosta fields (moved from the customer/order fo
     const user = userEvent.setup();
     renderDialog(() => {});
 
-    expect(screen.queryByLabelText("Bosta city")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Governorate")).not.toBeInTheDocument();
 
     await user.click(screen.getByLabelText("Shipping company"));
     await user.click(await screen.findByRole("option", { name: "bosta" }));
 
-    const citySelect = await screen.findByLabelText("Bosta city");
-    expect(screen.getByLabelText("Bosta district")).toBeDisabled();
+    const citySelect = await screen.findByLabelText("Governorate");
+    expect(screen.getByLabelText("District")).toBeDisabled();
     expect(screen.getByLabelText("Goods value (optional)")).toBeInTheDocument();
     expect(screen.getByLabelText("Notes")).toBeInTheDocument();
 
     await user.click(citySelect);
     await user.click(await screen.findByRole("option", { name: "Cairo" }));
 
-    const districtSelect = await screen.findByLabelText("Bosta district");
+    const districtSelect = await screen.findByLabelText("District");
     await waitFor(() => expect(districtSelect).not.toBeDisabled());
     await user.click(districtSelect);
     expect(await screen.findByRole("option", { name: "1st Settlement" })).toBeInTheDocument();
@@ -148,12 +160,12 @@ describe("SelectCarrierDialog — Bosta fields (moved from the customer/order fo
     const continueButton = screen.getByRole("button", { name: "Continue" });
     expect(continueButton).toBeDisabled();
 
-    const citySelect = await screen.findByLabelText("Bosta city");
+    const citySelect = await screen.findByLabelText("Governorate");
     await user.click(citySelect);
     await user.click(await screen.findByRole("option", { name: "Cairo" }));
     expect(continueButton).toBeDisabled();
 
-    const districtSelect = await screen.findByLabelText("Bosta district");
+    const districtSelect = await screen.findByLabelText("District");
     await user.click(districtSelect);
     await user.click(await screen.findByRole("option", { name: "1st Settlement" }));
     // The recipient's first name is prefilled from the customer (async) and
@@ -196,6 +208,185 @@ describe("SelectCarrierDialog — Bosta fields (moved from the customer/order fo
     expect(screen.getByLabelText("Landmark")).toHaveValue("Above the pharmacy");
   });
 
+  it("prefills from the ORDER's own delivery snapshot before the customer's newer address", async () => {
+    // The customer's saved default below is their NEWER address; this order
+    // was placed to an older one, for someone else, and must win.
+    orderDelivery = {
+      name: "Mona Hassan",
+      line: "9 Old Maadi road",
+      landmark: "Next to the bakery",
+      rawCity: null,
+      rawState: null,
+    };
+    customerAddresses = [
+      {
+        id: "addr-1",
+        customerId: "cust-1",
+        line: "9 Old Maadi road",
+        landmark: "Next to the bakery",
+        notes: null,
+        governorateId: null,
+        bostaCityId: null,
+        bostaDistrictId: null,
+        bostaCityName: null,
+        isDefault: true,
+        active: true,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+    const user = userEvent.setup();
+    renderDialog(() => {});
+
+    await user.click(screen.getByLabelText("Shipping company"));
+    await user.click(await screen.findByRole("option", { name: "bosta" }));
+
+    await waitFor(() => expect(screen.getByLabelText("Address")).toHaveValue("9 Old Maadi road"));
+    // A gift: the receiver is the recipient named on the order, not the customer.
+    expect(screen.getByLabelText("First name")).toHaveValue("Mona");
+    expect(screen.getByLabelText("Landmark")).toHaveValue("Next to the bakery");
+  });
+
+  it("never crashes when the saved address has no rawState/rawCity at all (pre-sync addresses)", async () => {
+    // Same fixture shape as older addresses predating storefront-address-sync
+    // — `rawState`/`rawCity` simply absent, not even `null`. A real bug once
+    // crashed the whole dialog here (reading `.trim()` on `undefined`).
+    customerAddresses = [
+      {
+        id: "addr-1",
+        customerId: "cust-1",
+        line: "5 Tahrir street",
+        landmark: null,
+        notes: null,
+        governorateId: null,
+        bostaCityId: null,
+        bostaDistrictId: null,
+        bostaCityName: null,
+        isDefault: true,
+        active: true,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+    const user = userEvent.setup();
+    renderDialog(() => {});
+
+    await user.click(screen.getByLabelText("Shipping company"));
+    await user.click(await screen.findByRole("option", { name: "bosta" }));
+
+    await waitFor(() => expect(screen.getByLabelText("Address")).toHaveValue("5 Tahrir street"));
+    // Governorate/district stay unselected — nothing to auto-match against.
+    expect(screen.getByLabelText("Governorate")).toHaveTextContent("—");
+  });
+
+  it("auto-selects the Bosta governorate/district that match the storefront's saved text", async () => {
+    customerAddresses = [
+      {
+        id: "addr-1",
+        customerId: "cust-1",
+        line: "5 Tahrir street",
+        landmark: null,
+        notes: null,
+        governorateId: "gov-1",
+        bostaCityId: null,
+        bostaDistrictId: null,
+        bostaCityName: null,
+        source: "storefront",
+        rawCity: "1st Settlement",
+        rawState: "Cairo",
+        isDefault: true,
+        active: true,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+    const user = userEvent.setup();
+    renderDialog(() => {});
+
+    await user.click(screen.getByLabelText("Shipping company"));
+    await user.click(await screen.findByRole("option", { name: "bosta" }));
+
+    await waitFor(() => expect(screen.getByLabelText("Governorate")).toHaveTextContent("Cairo"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("District")).toHaveTextContent("1st Settlement"),
+    );
+    // Still a plain, editable dropdown — not locked to the auto-match.
+    expect(screen.getByLabelText("Governorate")).toBeEnabled();
+  });
+
+  it("matches a common Arabic spelling variant (trailing ة vs ه) — same place, not a guess", async () => {
+    // Bosta spells it "المنوفيه" (ه); the storefront's own checkout dropdown
+    // spells it "المنوفية" (ة) — same governorate, real-world discrepancy
+    // confirmed in production (2026-09-06).
+    fetchMock.mockImplementation((input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.includes("/shipping/carriers")) {
+        return Promise.resolve(
+          json(200, {
+            data: [
+              {
+                key: "bosta",
+                connected: true,
+                pickupLocationWarning: false,
+                connectedAt: "2026-01-01T00:00:00.000Z",
+              },
+            ],
+          }),
+        );
+      }
+      if (url.endsWith("/shipping/bosta/cities")) {
+        return Promise.resolve(
+          json(200, { data: [{ id: "c1", name: "Menofia", nameAr: "المنوفيه" }] }),
+        );
+      }
+      if (url.includes("/shipping/bosta/cities/") && url.includes("/districts")) {
+        return Promise.resolve(json(200, { data: [] }));
+      }
+      if (url.match(/\/customers\/cust-1$/) && method === "GET") {
+        return Promise.resolve(
+          json(200, {
+            id: "cust-1",
+            name: "Naruto Uzumaki",
+            phone: "+201065685435",
+            email: null,
+            notes: null,
+            active: true,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            ordersCount: 0,
+            totalSpent: 0,
+            lastOrderAt: null,
+            addresses: [
+              {
+                id: "addr-1",
+                customerId: "cust-1",
+                line: "x",
+                landmark: null,
+                notes: null,
+                governorateId: null,
+                bostaCityId: null,
+                bostaDistrictId: null,
+                bostaCityName: null,
+                source: "storefront",
+                rawCity: null,
+                rawState: "المنوفية",
+                isDefault: true,
+                active: true,
+                createdAt: "2026-01-01T00:00:00.000Z",
+                updatedAt: "2026-01-01T00:00:00.000Z",
+              },
+            ],
+          }),
+        );
+      }
+      return Promise.resolve(json(404, { error: { code: "NOT_FOUND", statusCode: 404 } }));
+    });
+
+    renderDialog(() => {});
+    await waitFor(() => expect(screen.getByLabelText("Governorate")).toHaveTextContent("المنوفيه"));
+  });
+
   it("prefills the recipient name from the customer, and lets the zone narrow the district list", async () => {
     const user = userEvent.setup();
     renderDialog(() => {});
@@ -206,7 +397,7 @@ describe("SelectCarrierDialog — Bosta fields (moved from the customer/order fo
     await waitFor(() => expect(screen.getByLabelText("First name")).toHaveValue("Naruto"));
     expect(screen.getByLabelText("Last name")).toHaveValue("Uzumaki");
 
-    const citySelect = await screen.findByLabelText("Bosta city");
+    const citySelect = await screen.findByLabelText("Governorate");
     await user.click(citySelect);
     await user.click(await screen.findByRole("option", { name: "Cairo" }));
 
@@ -224,10 +415,10 @@ describe("SelectCarrierDialog — Bosta fields (moved from the customer/order fo
     await user.click(await screen.findByRole("option", { name: "bosta" }));
     await waitFor(() => expect(screen.getByLabelText("First name")).toHaveValue("Naruto"));
 
-    const citySelect = await screen.findByLabelText("Bosta city");
+    const citySelect = await screen.findByLabelText("Governorate");
     await user.click(citySelect);
     await user.click(await screen.findByRole("option", { name: "Cairo" }));
-    const districtSelect = await screen.findByLabelText("Bosta district");
+    const districtSelect = await screen.findByLabelText("District");
     await user.click(districtSelect);
     await user.click(await screen.findByRole("option", { name: "1st Settlement" }));
 
